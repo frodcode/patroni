@@ -31,7 +31,7 @@ ENV CONFDVERSION 0.16.0
 RUN curl -L https://github.com/kelseyhightower/confd/releases/download/v${CONFDVERSION}/confd-${CONFDVERSION}-linux-amd64 > /usr/local/bin/confd \
     && chmod +x /usr/local/bin/confd
 
-ADD patronictl.py patroni.py docker/entrypoint.sh /
+ADD patronictl.py patroni.py docker/entrypoint.sh run.sh /
 ADD patroni /patroni/
 ADD extras/confd /etc/confd
 
@@ -41,5 +41,5 @@ RUN sed -i 's/env python/&3/' patroni*.py && ln -s /patronictl.py /usr/local/bin
 EXPOSE 2379 5432 8008
 
 ENV LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
-ENTRYPOINT ["/bin/bash", "/entrypoint.sh"]
+ENTRYPOINT ["/bin/bash", "/run.sh"]
 USER postgres

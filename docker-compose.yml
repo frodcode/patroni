@@ -1,58 +1,142 @@
 # docker compose file for running a 3-node PostgreSQL cluster
 # with etcd as the SIS
 
-patroni_etcd:
-    container_name: patroni_etcd
-    image: patroni
-    command: --etcd
+# replication slot - study more
+# etcd - something like consule - distributed key-value store
+# use ./patronictl.py -c patroni.yml list to see the list of nodes
+# time to release configuration in patroni how long it takes to switch over from one node to the other (most likely when the leader is killed -9)
+# if leader's Patroni is killed then the database is actually still running. When the changes are done in this database and then the Patroni
+# is started again pg_rewind (?) is executed and it fails - because the new master is an other node and there are split-brained changes
+# Patroni most-likely kills the database and start it again
+# pg_rewind replays deltas which are missing in WALs
+# patroni allows to change configuration on runtime using patronictl edit-config it it's possible for postgres
+# curl -X GET http://127.0.0.1:8008 for getting information about the cluster
+# to restart use patrinictl restart
+# ttl >= loop_wait + retry_timeout * 2
+# ttl parameter - how long the leader must be gone to promote the standby node
+# loop_wait how long the backoff is
+# retry_timout - timeout for reaching ectd
+# Patroni bootstrap section in configuration is applied only for the first start - then you have to change it in (in higher priority sort)
+# - patronictl - preferred
+# - postgresql section - this is local for the particular node
+# - etcd - /service/<cluster name>/config
+# do not edit postresql.conf file - it's overwritten by Patroni
+# curl -X GET http://127.0.0.1:8008/ | jq  - get info about the node - you can add /patroni - it's more rich and also always returns 200 status, contains role (master, replica)
+# curl -X GET http://127.0.0.1:8008/replica | jq - replica will return 200 code if it's replica, otherwise 503
+# curl -X GET http://127.0.0.1:8008/master | jq - replica will return 200 code if it's master, otherwise 503
+# curl -X GET http://127.0.0.1:8008/config | jq - get configuration
+# POST /swithcover, POST /failover -  switch to other node
+# POST /restart
+# POST /reinitialize - if the WALs are too behind and it takes long, or it's somehow broken. It's better than deleting /data directory (you might make mistake and delete master node's data)
+# it has callback scripts like on_start, on_stop, onn_reload, on_restart, on_role_change - they're sh scripts - defined in postgresql section
+# HA proxy seems to be nothing special - it's classic HA proxy that checks the nodes' REST APIs. PGBounder might be used instead
+# PostgreSQL 10 is able to connect to multiple host using URL
+# Tags
+# - nofailover (true/false) - the node will never be master
+# - noloadbalance - /replica REST API always returns 503
+# - clonefrom
+# - nosync - node will never become a synchronous replica
+# - replicatefrom (node name) - specify the node to replicate from (it doesn't have to be master node)
+# switchover - is graceful operation patronictl switchover <cluster name> (it's interactive - you'll be asked to specify the candidate).
+# The switchover guarantees no data loss. It can be even scheduled to some time. When the master is switched to replica it actually restart the postgresql
+# failover - emergency situation
+# There is also pause (I didn't care much about this)
+# synchronous_mode (true/false) - it's cluster-wide settings. Patroni picks one of the replicas (there is no way how to have multiple synchronous ones) and set it to be a synchronous one. If set to true than it won't let you to failover to non-synchronous replica.
+# in synchronous mode patronictl list shows role=Sync standby. For this there is special endpoint /sync or /async which returns 200/503  codes
+# synchronous_mode_strict (true/false) - if there is no synchronous replica master will not accept writes, it also requires (?) to have at least on more replica to be replicated to
+# restapi configuration section - listen to ports are configured
+# DCS configuration - for etcd/consul/zookeeper
+#
+# 14:24:27 killed patroni
+# 14:24:50 Failed to validate connection org.postgresql.jdbc.PgConnection@4eeab3e (This connection has been closed.). Possibly consider using a shorter maxLifetime value.
 
-dbnode1:
-    image: patroni
-    hostname: dbnode1
-    links:
-        - patroni_etcd:patroni_etcd
-    volumes:
-        - ./patroni:/patroni
-    env_file: docker/patroni-secrets.env
-    environment:
-        PATRONI_ETCD_URL: http://patroni_etcd:2379
-        PATRONI_NAME: dbnode1
-        PATRONI_SCOPE: testcluster
+# number is  563
+# node1 is saying that it's -master-
+# node2 is saying that it's -replica-
+# node3 is saying that it's -master-
 
-dbnode2:
-    image: patroni
-    hostname: dbnode2
-    links:
-        - patroni_etcd:patroni_etcd
-    volumes:
-        - ./patroni:/patroni
-    env_file: docker/patroni-secrets.env
-    environment:
-        PATRONI_ETCD_URL: http://patroni_etcd:2379
-        PATRONI_NAME: dbnode2
-        PATRONI_SCOPE: testcluster
+# 14:27:45 1450 started node - the database one was restarted - all connections were closed (likely)
+# node1 is saying that it's -replica-
+# node2 is saying that it's -replica-
+# node3 is saying that it's -master-
 
-dbnode3:
-    image: patroni
-    hostname: dbnode3
-    links:
-        - patroni_etcd:patroni_etcd
-    volumes:
-        - ./patroni:/patroni
-    env_file: docker/patroni-secrets.env
-    environment:
-        PATRONI_ETCD_URL: http://patroni_etcd:2379
-        PATRONI_NAME: dbnode3
-        PATRONI_SCOPE: testcluster
+# 2077 - stopped application
 
-haproxy:
-    image: patroni
-    links:
-        - patroni_etcd:patroni_etcd
-    ports:
-        - "5000:5000"
-        - "5001:5001"
-    environment:
-        PATRONI_ETCD_URL: http://patroni_etcd:2379
-        PATRONI_SCOPE: testcluster
-    command: --confd
+# node1 - last inserted id is 1264
+# node2 - last inserted id is 640
+# node3 - last inserted id is 1264
+
+# after node2 reinit the id was 1264
+
+version: '3.3'
+services:
+  patroni_etcd:
+      container_name: patroni_etcd
+      image: patroni
+      command: --etcd
+
+  dbnode1:
+      image: patroni
+      hostname: dbnode1
+      container_name: dbnode1
+      links:
+          - patroni_etcd:patroni_etcd
+      ports:
+        - "15001:5432"
+      volumes:
+          - ./patroni:/patroni
+      env_file: docker/patroni-secrets.env
+      environment:
+          PATRONI_ETCD_URL: http://patroni_etcd:2379
+          PATRONI_NAME: dbnode1
+          PATRONI_SCOPE: testcluster
+          synchronous_mode: "true"
+#      command: "tail -f /dev/null"
+
+  dbnode2:
+      image: patroni
+      hostname: dbnode2
+      container_name: dbnode2
+      links:
+          - patroni_etcd:patroni_etcd
+      ports:
+        - "15002:5432"
+      volumes:
+          - ./patroni:/patroni
+      env_file: docker/patroni-secrets.env
+      environment:
+          PATRONI_ETCD_URL: http://patroni_etcd:2379
+          PATRONI_NAME: dbnode2
+          PATRONI_SCOPE: testcluster
+          synchronous_mode: "true"
+#      command: "tail -f /dev/null"
+
+  dbnode3:
+      image: patroni
+      hostname: dbnode3
+      container_name: dbnode3
+      links:
+          - patroni_etcd:patroni_etcd
+      ports:
+        - "15003:5432"
+      volumes:
+          - ./patroni:/patroni
+      env_file: docker/patroni-secrets.env
+      environment:
+          PATRONI_ETCD_URL: http://patroni_etcd:2379
+          PATRONI_NAME: dbnode3
+          PATRONI_SCOPE: testcluster
+          synchronous_mode: "true"
+#      command: "tail -f /dev/null"
+
+#haproxy:
+#    image: patroni
+#    links:
+#        - patroni_etcd:patroni_etcd
+#    ports:
+#        - "5000:5000"
+#        - "5001:5001"
+#    environment:
+#        PATRONI_ETCD_URL: http://patroni_etcd:2379
+#        PATRONI_SCOPE: testcluster
+#    command: --confd

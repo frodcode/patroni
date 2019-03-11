@@ -24,6 +24,22 @@ DOCKER_IP=$(hostname --ip-address)
 PATRONI_SCOPE=${PATRONI_SCOPE:-batman}
 ETCD_ARGS="--data-dir /tmp/etcd.data -advertise-client-urls=http://${DOCKER_IP}:2379 -listen-client-urls=http://0.0.0.0:2379"
 
+
+ttl=${ttl:-30}
+loop_wait=${loop_wait:-10}
+retry_timeout=${retry_timeout:-10}
+maximum_lag_on_failover=${maximum_lag_on_failover:-1048576}
+master_start_timeout=${master_start_timeout:-300}
+synchronous_mode=${synchronous_mode:-false}
+synchronous_mode_strict=${synchronous_mode_strict:-false}
+use_pg_rewind=${use_pg_rewind:-true}
+use_slots=${use_slots:-true}
+wal_level=${wal_level:-hot_standby}
+nofailover=${nofailover:-false}
+noloadbalance=${noloadbalance:-false}
+clonefrom=${clonefrom:-false}
+nosync=${nosync:-false}
+
 optspec=":vh-:"
 while getopts "$optspec" optchar; do
     case "${optchar}" in
@@ -97,12 +113,28 @@ export PATRONI_POSTGRESQL_PGPASS="$HOME/.pgpass"
 cat > /patroni.yml <<__EOF__
 bootstrap:
   dcs:
+    ttl: ${ttl}
+    loop_wait: ${loop_wait}
+    retry_timeout: ${retry_timeout}
+    maximum_lag_on_failover: ${maximum_lag_on_failover}
+    master_start_timeout: ${master_start_timeout}
+    synchronous_mode: ${synchronous_mode}
+    synchronous_mode_strict: ${synchronous_mode_strict}
+
     postgresql:
-      use_pg_rewind: true
+      use_pg_rewind: ${use_pg_rewind}
+      use_slots: ${use_slots}
+      wal_level: ${wal_level}
 
   pg_hba:
   - host all all 0.0.0.0/0 md5
   - host replication replicator ${DOCKER_IP}/16    md5
+tags:
+  nofailover: ${nofailover}
+  noloadbalance: ${noloadbalance}
+  clonefrom: ${clonefrom}
+  nosync  : ${nosync}
+
 __EOF__
 
 mkdir -p "$HOME/.config/patroni"
